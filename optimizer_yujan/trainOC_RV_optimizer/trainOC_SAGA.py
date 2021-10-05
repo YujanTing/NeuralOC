@@ -16,14 +16,16 @@ from src.OCflow import OCflow
 from src.plotter import *
 from src.initProb import *
 
+from optimizer_yujan.VR_optimizer.saga import SAGA
+torch.autograd.set_detect_anomaly(True)
 
 # defaults are for
 
 parser = argparse.ArgumentParser('Optimal Control')
 parser.add_argument(
     '--data', choices=['softcorridor','swap2','swap12','swarm','swarm50','singlequad',
-                'swap12_1pair', 'swap12_2pair', 'swap12_3pair', 'swap12_4pair', 'swap12_5pair', # for CoD experiment
-                'midcross2', 'midcross4', 'midcross20', 'midcross30'],
+                       'swap12_1pair', 'swap12_2pair', 'swap12_3pair', 'swap12_4pair', 'swap12_5pair', # for CoD experiment
+                       'midcross2', 'midcross4', 'midcross20', 'midcross30'],
     type=str, default='softcorridor')
 
 parser.add_argument("--nt"    , type=int, default=20, help="number of time steps")
@@ -33,7 +35,7 @@ parser.add_argument('--alph'  , type=str, default='100.0, 10000.0, 300.0, 0.2, 0
 parser.add_argument('--m'     , type=int, default=32, help="NN width")
 parser.add_argument('--nTh'   , type=int, default=2 , help="NN depth")
 
-parser.add_argument('--niters', type=int, default=1800)
+parser.add_argument('--niters', type=int, default=2500)
 parser.add_argument('--lr'    , type=float, default=0.01)
 parser.add_argument('--optim' , type=str, default='adam', choices=['adam'])
 parser.add_argument('--weight_decay', type=float, default=0.0)
@@ -130,10 +132,11 @@ if __name__ == '__main__':
         net.load_state_dict(checkpt["state_dict"])
         net = net.to(argPrec).to(device)
 
-    optim = torch.optim.Adam(net.parameters(), lr=args.lr, weight_decay=args.weight_decay )
+    seed = 77
+    optim = SAGA(net.parameters(), dict(lr=0.0001, n=1024, seed=77))
 
     strTitle = args.data + '_' + sStartTime + '_alph{:}_{:}_{:}_{:}_{:}_{:}_m{:}'.format(
-                     int(alph[0]), int(alph[1]), int(alph[2]),int(alph[3]), int(alph[4]), int(alph[5]), m)
+        int(alph[0]), int(alph[1]), int(alph[2]),int(alph[3]), int(alph[4]), int(alph[5]), m)
 
     logger.info(net)
     logger.info("--------------------------------------------------")
@@ -153,7 +156,7 @@ if __name__ == '__main__':
 
     # show Q and W values, but they're already included inside the L value
     log_msg = (
-            '{:5s} {:7s} {:6s}   {:9s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}     {:9s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}'.format(
+        '{:5s} {:7s} {:6s}   {:9s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}     {:9s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}'.format(
             'iter', 'lr', '  time', 'loss', 'L', 'G', 'HJt', 'HJfin', 'HJgrad', 'Q', 'W',  'valLoss', 'valL', 'valG', 'valHJt', 'valHJf','valHJg', 'valQ', 'valW'
         )
     )
@@ -165,13 +168,29 @@ if __name__ == '__main__':
     time_meter = utils.AverageMeter()
     end = time.time()
 
+    rd = np.random.RandomState(seed)
     net.train()
-    for itr in range(1, args.niters+1):
 
+    for itr in range(1, args.niters):
+
+        # samples ik ∈ {1, . . . , n}
+        i_k = int(rd.rand(1) * args.n_train)
+        sample = x0[i_k]
+        sample = torch.reshape(sample, (1, sample.size()[0]))
         optim.zero_grad()
-        Jc, cs = OCflow(x0, net, prob, tspan=tspan, nt=nt, stepper="rk4", alph=net.alph)
+        Jc, cs = OCflow(sample, net, prob, tspan=tspan, nt=nt, stepper="rk4", alph=net.alph)
         Jc.backward()
-        optim.step()  # ADAM
+        optim.step()  # saga
+
+        # print('itr: ' + str(itr))
+        # print('i_k outside: ' + str(i_k))
+        # count = 0
+        # for group in optim.param_groups:
+        #     for p in group['params']:
+        #         print(p.size())
+        #         print('----------------------------------------------------------')
+
+
 
         time_meter.update(time.time() - end)
 
@@ -204,7 +223,7 @@ if __name__ == '__main__':
                     torch.save({
                         'args': args,
                         'state_dict': bestParams,
-                        }, os.path.join(args.save, strTitle + '_checkpt.pth'))
+                    }, os.path.join(args.save, strTitle + '_checkpt.pth'))
 
                 net.train()
                 prob.train()
@@ -217,7 +236,7 @@ if __name__ == '__main__':
         if itr % args.viz_freq == 0:
             net.eval()
             prob.eval()
-            
+
             currState = net.state_dict()
             net.load_state_dict(bestParams)
             with torch.no_grad():
@@ -235,7 +254,7 @@ if __name__ == '__main__':
                     x0v2 = xInit.view(1, -1)
                     plotSwarm(x0v2, net, prob, nt_val, sPath, sTitle=strTitle, approach=args.approach)
                 elif args.data == 'corridor' \
-                        or args.data == 'softcorridor'\
+                        or args.data == 'softcorridor' \
                         or args.data == 'hardcorridor' \
                         or args.data[0:4] == 'swap' \
                         or args.data[0:8] == 'midcross':
