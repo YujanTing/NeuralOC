@@ -17,6 +17,7 @@ from src.plotter import *
 from src.initProb import *
 
 import matplotlib.pyplot as plt
+import wandb
 
 
 # defaults are for
@@ -160,6 +161,27 @@ if __name__ == '__main__':
         )
     )
 
+    # initialize wandb
+    wandb.init(project='NeuralOC', entity='yujanting')
+    config = wandb.config
+
+    wandb.log({"net": net,
+               # "problem": prob,
+               "DIMENSION": d,
+               "m": m,
+               "nTh": nTh,
+               "alpha": alph,
+               "nt": nt,
+               "nt_val": nt_val,
+               "Number of trainable parameters": count_parameters(net),
+               "optimizer": str(optim),
+               "data": args.data,
+               # "device": device,
+               "n_train": n_train,
+               "maxIters": args.niters,
+               "val_freq": args.val_freq,
+               "viz_freq": args.viz_freq})
+
     logger.info(log_msg)
 
     best_loss = float('inf')
@@ -187,6 +209,17 @@ if __name__ == '__main__':
                 itr, optim.param_groups[0]['lr'], time_meter.val, Jc, cs[0], cs[1], cs[2], cs[3], cs[4], cs[5], cs[6]
             )
         )
+        wandb.log({"iter": itr,
+                   "lr": optim.param_groups[0]['lr'],
+                   "time": time_meter.val,
+                   "loss": Jc,
+                   "L": cs[0],
+                   "G": cs[1],
+                   "HJt": cs[2],
+                   "HJfin": cs[3],
+                   "HJgrad": cs[4],
+                   "Q": cs[5],
+                   "W": cs[6]})
 
 
         # validation
@@ -201,6 +234,15 @@ if __name__ == '__main__':
                 log_message += '    {:9.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e} '.format(
                     test_loss, test_cs[0], test_cs[1], test_cs[2], test_cs[3], test_cs[4], test_cs[5], test_cs[6]
                 )
+                wandb.log({"iter": itr,
+                           "valLoss": test_loss,
+                           "valL": test_cs[0],
+                           "valG": test_cs[1],
+                           "valHJt": test_cs[2],
+                           "valHJf": test_cs[3],
+                           "valHJg": test_cs[4],
+                           "valQ": test_cs[5],
+                           "valW": test_cs[6]})
 
                 # for plot
                 loss_val.append(test_loss.detach().item())
@@ -283,5 +325,8 @@ if __name__ == '__main__':
 
     logger.info("Training Time: {:} seconds".format(time_meter.sum))
     logger.info('Training has finished.  ' + os.path.join(args.save, strTitle ))
+
+    wandb.log({"result_image": wandb.Image("result_trainOC_Adam.png"),
+               "Training Time": time_meter.sum})
 
 

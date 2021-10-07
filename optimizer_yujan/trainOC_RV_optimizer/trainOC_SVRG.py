@@ -50,13 +50,13 @@ parser.add_argument('--prec'    , type=str, default='single', choices=['single',
 parser.add_argument('--approach', type=str, default='ocflow', choices=['ocflow'])
 
 parser.add_argument('--viz_freq', type=int, default=96, help="how often to plot visuals") # must be >= val_freq
-parser.add_argument('--val_freq', type=int, default=16, help="how often to run model on validation set")
+parser.add_argument('--val_freq', type=int, default=32, help="how often to run model on validation set")
 parser.add_argument('--log_freq', type=int, default=1, help="how often to print results to log")
 
-parser.add_argument('--lr_freq' , type=int  , default=608, help="how often to decrease lr")
+parser.add_argument('--lr_freq' , type=int  , default=576, help="how often to decrease lr")
 parser.add_argument('--lr_decay', type=float, default=0.1, help="how much to decrease lr")
 parser.add_argument('--n_train' , type=int  , default=1024, help="number of training samples")
-parser.add_argument('--bs'      , type=int  , default=64, help="batch size")
+parser.add_argument('--bs'      , type=int  , default=32, help="batch size")
 parser.add_argument('--var0'    , type=float, default=1.0, help="variance of rho_0 to sample from")
 parser.add_argument('--sample_freq',type=int, default=96, help="how often to resample training data")
 
@@ -166,6 +166,28 @@ if __name__ == '__main__':
     logger.info(strTitle)
     logger.info("--------------------------------------------------\n")
 
+    # initialize wandb
+    wandb.init(project='NeuralOC', entity='yujanting')
+    config = wandb.config
+
+    wandb.log({"net": net,
+               # "problem": prob,
+               "DIMENSION": d,
+               "m": m,
+               "nTh": nTh,
+               "alpha": alph,
+               "nt": nt,
+               "nt_val": nt_val,
+               "Number of trainable parameters": count_parameters(net),
+               "optimizer": str(optimizer_k),
+               "data": args.data,
+               # "device": device,
+               "n_train": n_train,
+               "maxIters": args.niters,
+               "val_freq": args.val_freq,
+               "viz_freq": args.viz_freq,
+               "batch size": args.bs})
+
     # show Q and W values, but they're already included inside the L value
     log_msg = (
         '{:5s} {:7s} {:6s}   {:9s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}     {:9s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}  {:8s}'.format(
@@ -190,7 +212,7 @@ if __name__ == '__main__':
     for itr in range(0, args.niters, batch_num):
 
         train_loader = DataLoader(x0, args.bs, shuffle = True)
-        val_loader = DataLoader(x0, args.bs, shuffle = True)
+        val_loader = DataLoader(x0v, args.bs, shuffle = True)
 
         Jc, cs, net, net_snapshot, itr = train_epoch_SVRG(net, net_snapshot, optimizer_k, optimizer_snapshot, train_loader, prob, tspan, nt, "rk4", net.alph, itr)
 
@@ -204,6 +226,18 @@ if __name__ == '__main__':
                 itr, optimizer_k.param_groups[0]['lr'], time_meter.val, Jc, cs[0], cs[1], cs[2], cs[3], cs[4], cs[5], cs[6]
             )
         )
+
+        wandb.log({"iter": itr,
+                   "lr": optimizer_k.param_groups[0]['lr'],
+                   "time": time_meter.val,
+                   "loss": Jc,
+                   "L": cs[0],
+                   "G": cs[1],
+                   "HJt": cs[2],
+                   "HJfin": cs[3],
+                   "HJgrad": cs[4],
+                   "Q": cs[5],
+                   "W": cs[6]})
 
 
         # validation
@@ -222,6 +256,16 @@ if __name__ == '__main__':
                     test_loss, test_cs[0], test_cs[1], test_cs[2], test_cs[3], test_cs[4], test_cs[5], test_cs[6]
                 )
 
+                wandb.log({"iter": itr,
+                           "valLoss": test_loss,
+                           "valL": test_cs[0],
+                           "valG": test_cs[1],
+                           "valHJt": test_cs[2],
+                           "valHJf": test_cs[3],
+                           "valHJg": test_cs[4],
+                           "valQ": test_cs[5],
+                           "valW": test_cs[6]})
+
                 # save best set of parameters
                 if test_loss < best_loss:
                     best_loss = test_loss
@@ -236,13 +280,13 @@ if __name__ == '__main__':
                 net.train()
                 prob.train()
 
-
         if itr % args.log_freq == 0: # wait several iteration to print
             logger.info(log_message)  # print iteration
 
         # make a plot
         if itr % args.viz_freq == 0:
             net.eval()
+            net_snapshot.eval()
             prob.eval()
 
             currState = net.state_dict()
@@ -271,6 +315,7 @@ if __name__ == '__main__':
 
             net.load_state_dict(currState)
             net.train()
+            net_snapshot.train()
             prob.train()
 
         # shrink step size
@@ -303,5 +348,9 @@ if __name__ == '__main__':
 
     logger.info("Training Time: {:} seconds".format(time_meter.sum))
     logger.info('Training has finished.  ' + os.path.join(args.save, strTitle ))
+
+    wandb.log({"result_image": wandb.Image("result_trainOC_SVRG.png"),
+               "Training Time": time_meter.sum})
+
 
 

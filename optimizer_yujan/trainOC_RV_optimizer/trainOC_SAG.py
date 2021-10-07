@@ -19,6 +19,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from optimizer_yujan.VR_optimizer.sag import SAG
 torch.autograd.set_detect_anomaly(True)
+import wandb
 
 # defaults are for
 
@@ -135,8 +136,6 @@ if __name__ == '__main__':
 
     seed = 77
     optim = SAG(net.parameters(), dict(lr=0.0015, n=1024, seed=77))
-    scheduler = ReduceLROnPlateau(optim, 'min', factor=0.1, patience=3)
-
 
     strTitle = args.data + '_' + sStartTime + '_alph{:}_{:}_{:}_{:}_{:}_{:}_m{:}'.format(
         int(alph[0]), int(alph[1]), int(alph[2]),int(alph[3]), int(alph[4]), int(alph[5]), m)
@@ -156,6 +155,27 @@ if __name__ == '__main__':
     logger.info("saveLocation = {:}".format(args.save))
     logger.info(strTitle)
     logger.info("--------------------------------------------------\n")
+
+    # initialize wandb
+    wandb.init(project='NeuralOC', entity='yujanting')
+    config = wandb.config
+
+    wandb.log({"net": net,
+               # "problem": prob,
+               "DIMENSION": d,
+               "m": m,
+               "nTh": nTh,
+               "alpha": alph,
+               "nt": nt,
+               "nt_val": nt_val,
+               "Number of trainable parameters": count_parameters(net),
+               "optimizer": str(optim),
+               "data": args.data,
+               # "device": device,
+               "n_train": n_train,
+               "maxIters": args.niters,
+               "val_freq": args.val_freq,
+               "viz_freq": args.viz_freq})
 
     # show Q and W values, but they're already included inside the L value
     log_msg = (
@@ -191,15 +211,6 @@ if __name__ == '__main__':
         # for plot
         loss_train.append(Jc.detach().item())
 
-        # print('itr: ' + str(itr))
-        # print('i_k outside: ' + str(i_k))
-        # count = 0
-        # for group in optim.param_groups:
-        #     for p in group['params']:
-        #         print(p.size())
-        #         print('----------------------------------------------------------')
-
-
 
         time_meter.update(time.time() - end)
 
@@ -208,6 +219,18 @@ if __name__ == '__main__':
                 itr, optim.param_groups[0]['lr'], time_meter.val, Jc, cs[0], cs[1], cs[2], cs[3], cs[4], cs[5], cs[6]
             )
         )
+
+        wandb.log({"iter": itr,
+                   "lr": optim.param_groups[0]['lr'],
+                   "time": time_meter.val,
+                   "loss": Jc,
+                   "L": cs[0],
+                   "G": cs[1],
+                   "HJt": cs[2],
+                   "HJfin": cs[3],
+                   "HJgrad": cs[4],
+                   "Q": cs[5],
+                   "W": cs[6]})
 
 
         # validation
@@ -218,9 +241,6 @@ if __name__ == '__main__':
 
                 test_loss, test_cs = OCflow(x0v, net, prob, tspan=tspan, nt=nt, stepper="rk4", alph=net.alph)
 
-                # lr decay strategy
-                scheduler.step(test_loss)
-
                 # for plot
                 loss_val.append(test_loss.detach().item())
 
@@ -228,6 +248,16 @@ if __name__ == '__main__':
                 log_message += '    {:9.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e} '.format(
                     test_loss, test_cs[0], test_cs[1], test_cs[2], test_cs[3], test_cs[4], test_cs[5], test_cs[6]
                 )
+
+                wandb.log({"iter": itr,
+                           "valLoss": test_loss,
+                            "valL": test_cs[0],
+                            "valG": test_cs[1],
+                            "valHJt": test_cs[2],
+                            "valHJf": test_cs[3],
+                            "valHJg": test_cs[4],
+                            "valQ": test_cs[5],
+                            "valW": test_cs[6]})
 
                 # save best set of parameters
                 if test_loss.item() < best_loss:
@@ -280,11 +310,11 @@ if __name__ == '__main__':
             net.train()
             prob.train()
 
-        # # shrink step size
-        # if itr % args.lr_freq == 0:
-        #     net.load_state_dict(bestParams) # reset parameters to the best so far
-        #     for p in optim.param_groups:
-        #         p['lr'] *= args.lr_decay
+        # shrink step size
+        if itr % args.lr_freq == 0:
+            net.load_state_dict(bestParams) # reset parameters to the best so far
+            for p in optim.param_groups:
+                p['lr'] *= args.lr_decay
 
         if itr % args.sample_freq == 0:
             x0 = resample(x0, xInit, args.var0, cvt)
@@ -308,5 +338,8 @@ if __name__ == '__main__':
 
     logger.info("Training Time: {:} seconds".format(time_meter.sum))
     logger.info('Training has finished.  ' + os.path.join(args.save, strTitle ))
+
+    wandb.log({"result_image": wandb.Image("result_trainOC_SAG.png"),
+               "Training Time": time_meter.sum})
 
 

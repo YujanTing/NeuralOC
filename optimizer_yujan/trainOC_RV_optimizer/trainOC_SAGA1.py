@@ -24,9 +24,10 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.lr_scheduler import StepLR
 from torch.optim.lr_scheduler import MultiStepLR
 
-from optimizer_yujan.VR_optimizer.saga import SAGA
+from optimizer_yujan.VR_optimizer.saga1 import SAGA
 torch.autograd.set_detect_anomaly(True)
 import wandb
+from torch.utils.data import DataLoader
 
 # defaults are for
 
@@ -45,7 +46,7 @@ parser.add_argument('--m'     , type=int, default=32, help="NN width")
 parser.add_argument('--nTh'   , type=int, default=2 , help="NN depth")
 
 parser.add_argument('--niters', type=int, default=1800)
-parser.add_argument('--lr'    , type=float, default=0.01)
+parser.add_argument('--lr'    , type=float, default=0.001)
 parser.add_argument('--optim' , type=str, default='adam', choices=['adam'])
 parser.add_argument('--weight_decay', type=float, default=0.0)
 
@@ -55,15 +56,16 @@ parser.add_argument('--gpu'     , type=int, default=0, help="send to specific gp
 parser.add_argument('--prec'    , type=str, default='single', choices=['single','double'], help="single or double precision")
 parser.add_argument('--approach', type=str, default='ocflow', choices=['ocflow'])
 
-parser.add_argument('--viz_freq', type=int, default=100, help="how often to plot visuals") # must be >= val_freq
-parser.add_argument('--val_freq', type=int, default=25, help="how often to run model on validation set")
+parser.add_argument('--viz_freq', type=int, default=96, help="how often to plot visuals") # must be >= val_freq
+parser.add_argument('--val_freq', type=int, default=16, help="how often to run model on validation set")
 parser.add_argument('--log_freq', type=int, default=1, help="how often to print results to log")
 
-parser.add_argument('--lr_freq' , type=int  , default=600, help="how often to decrease lr")
+parser.add_argument('--lr_freq' , type=int  , default=592, help="how often to decrease lr")
 parser.add_argument('--lr_decay', type=float, default=0.1, help="how much to decrease lr")
 parser.add_argument('--n_train' , type=int  , default=1024, help="number of training samples")
+parser.add_argument('--bs'      , type=int  , default=64, help="batch size")
 parser.add_argument('--var0'    , type=float, default=1.0, help="variance of rho_0 to sample from")
-parser.add_argument('--sample_freq',type=int, default=100, help="how often to resample training data")
+parser.add_argument('--sample_freq',type=int, default=96, help="how often to resample training data")
 
 # to adjust alph weights midway through training, which can be helpful in more complicated problems
 # where the first task is to get to a low G, then tune things to be more optimal
@@ -141,8 +143,7 @@ if __name__ == '__main__':
         net.load_state_dict(checkpt["state_dict"])
         net = net.to(argPrec).to(device)
 
-    seed = 77
-    optim = SAGA(net.parameters(), dict(lr=0.0001, n=1024, seed=77))
+    optim = SAGA(net.parameters(), dict(lr=args.lr, n=args.n_train))
 
     strTitle = args.data + '_' + sStartTime + '_alph{:}_{:}_{:}_{:}_{:}_{:}_m{:}'.format(
         int(alph[0]), int(alph[1]), int(alph[2]),int(alph[3]), int(alph[4]), int(alph[5]), m)
@@ -182,7 +183,8 @@ if __name__ == '__main__':
                "n_train": n_train,
                "maxIters": args.niters,
                "val_freq": args.val_freq,
-               "viz_freq": args.viz_freq})
+               "viz_freq": args.viz_freq,
+               "batch size": args.bs})
 
     # show Q and W values, but they're already included inside the L value
     log_msg = (
@@ -198,22 +200,24 @@ if __name__ == '__main__':
     time_meter = utils.AverageMeter()
     end = time.time()
 
-    rd = np.random.RandomState(seed)
     net.train()
 
     loss_train = []
     loss_val = []
+    batch_num = int(args.n_train/args.bs)
 
-    for itr in range(1, args.niters + 1):
+    for itr in range(batch_num, args.niters+1, batch_num):
 
-        # samples ik ∈ {1, . . . , n}
-        i_k = int(rd.rand(1) * args.n_train)
-        sample = x0[i_k]
-        sample = torch.reshape(sample, (1, sample.size()[0]))
-        optim.zero_grad()
-        Jc, cs = OCflow(sample, net, prob, tspan=tspan, nt=nt, stepper="rk4", alph=net.alph)
-        Jc.backward()
-        optim.step()  # saga
+        train_loader = DataLoader(x0, args.bs, shuffle = True)
+        val_loader = DataLoader(x0v, args.bs, shuffle = True)
+
+        net.train()
+
+        for x in train_loader:
+            optim.zero_grad()
+            Jc, cs = OCflow(x, net, prob, tspan=tspan, nt=nt, stepper="rk4", alph=net.alph)
+            Jc.backward()
+            optim.step()  # saga
 
         # for plot
         loss_train.append(Jc.detach().item())
@@ -245,7 +249,8 @@ if __name__ == '__main__':
                 net.eval()
                 prob.eval()
 
-                test_loss, test_cs = OCflow(x0v, net, prob, tspan=tspan, nt=nt, stepper="rk4", alph=net.alph)
+                for x in val_loader:
+                    test_loss, test_cs = OCflow(x, net, prob, tspan=tspan, nt=nt, stepper="rk4", alph=net.alph)
 
                 # for plot
                 loss_val.append(test_loss.detach().item())

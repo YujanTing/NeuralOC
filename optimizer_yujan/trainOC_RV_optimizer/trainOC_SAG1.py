@@ -15,12 +15,11 @@ from src.Phi import *
 from src.OCflow import OCflow
 from src.plotter import *
 from src.initProb import *
-
-from optimizer_yujan.VR_optimizer.svrg import SVRG_k, SVRG_Snapshot
 from torch.utils.data import DataLoader
-from optimizer_yujan.aux_driver.svrg_run import train_epoch_SVRG, validate_epoch
-import wandb
 
+from optimizer_yujan.VR_optimizer.sag1 import SAG
+torch.autograd.set_detect_anomaly(True)
+import wandb
 
 # defaults are for
 
@@ -39,7 +38,7 @@ parser.add_argument('--m'     , type=int, default=32, help="NN width")
 parser.add_argument('--nTh'   , type=int, default=2 , help="NN depth")
 
 parser.add_argument('--niters', type=int, default=1800)
-parser.add_argument('--lr'    , type=float, default=0.001)
+parser.add_argument('--lr'    , type=float, default=0.0001)
 parser.add_argument('--optim' , type=str, default='adam', choices=['adam'])
 parser.add_argument('--weight_decay', type=float, default=0.0)
 
@@ -50,16 +49,15 @@ parser.add_argument('--prec'    , type=str, default='single', choices=['single',
 parser.add_argument('--approach', type=str, default='ocflow', choices=['ocflow'])
 
 parser.add_argument('--viz_freq', type=int, default=96, help="how often to plot visuals") # must be >= val_freq
-parser.add_argument('--val_freq', type=int, default=16, help="how often to run model on validation set")
+parser.add_argument('--val_freq', type=int, default=64, help="how often to run model on validation set")
 parser.add_argument('--log_freq', type=int, default=1, help="how often to print results to log")
 
-parser.add_argument('--lr_freq' , type=int  , default=608, help="how often to decrease lr")
+parser.add_argument('--lr_freq' , type=int  , default=592, help="how often to decrease lr")
 parser.add_argument('--lr_decay', type=float, default=0.1, help="how much to decrease lr")
 parser.add_argument('--n_train' , type=int  , default=1024, help="number of training samples")
 parser.add_argument('--bs'      , type=int  , default=64, help="batch size")
 parser.add_argument('--var0'    , type=float, default=1.0, help="variance of rho_0 to sample from")
 parser.add_argument('--sample_freq',type=int, default=96, help="how often to resample training data")
-
 
 # to adjust alph weights midway through training, which can be helpful in more complicated problems
 # where the first task is to get to a low G, then tune things to be more optimal
@@ -121,9 +119,6 @@ if __name__ == '__main__':
     net = Phi(nTh=nTh,d=d,m=m, alph=alph)
     net = net.to(argPrec).to(device)
 
-    net_snapshot = Phi(nTh=nTh,d=d,m=m, alph=alph)
-    net_snapshot = net_snapshot.to(argPrec).to(device)
-
     # resume training on a model that's already had some training
     if args.resume is not None:
         logger.info(' ')
@@ -140,12 +135,7 @@ if __name__ == '__main__':
         net.load_state_dict(checkpt["state_dict"])
         net = net.to(argPrec).to(device)
 
-        net_snapshot = Phi(nTh=nTh, m=m, d=d, alph=alph)
-        net_snapshot.load_state_dict(checkpt["state_dict"])
-        net_snapshot = net_snapshot.to(argPrec).to(device)
-
-    optimizer_k = SVRG_k(net.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    optimizer_snapshot = SVRG_Snapshot(net_snapshot.parameters())
+    optim = SAG(net.parameters(), dict(lr=args.lr, n=args.n_train))
 
     strTitle = args.data + '_' + sStartTime + '_alph{:}_{:}_{:}_{:}_{:}_{:}_m{:}'.format(
         int(alph[0]), int(alph[1]), int(alph[2]),int(alph[3]), int(alph[4]), int(alph[5]), m)
@@ -158,13 +148,35 @@ if __name__ == '__main__':
     logger.info("nt={:}   nt_val={:}".format(nt,nt_val))
     logger.info("Number of trainable parameters: {}".format(count_parameters(net)))
     logger.info("--------------------------------------------------")
-    logger.info(str(optimizer_k)) # optimizer_yujan info
+    logger.info(str(optim)) # optimizer_yujan info
     logger.info("data={:} device={:}".format(args.data, device))
     logger.info("n_train={:}".format(n_train))
-    logger.info("maxIters={:} val_freq={:} viz_freq={:} bs={:}".format(args.niters, args.val_freq, args.viz_freq, args.bs))
+    logger.info("maxIters={:} val_freq={:} viz_freq={:}".format(args.niters, args.val_freq, args.viz_freq))
     logger.info("saveLocation = {:}".format(args.save))
     logger.info(strTitle)
     logger.info("--------------------------------------------------\n")
+
+    # initialize wandb
+    wandb.init(project='NeuralOC', entity='yujanting')
+    config = wandb.config
+
+    wandb.log({"net": net,
+               # "problem": prob,
+               "DIMENSION": d,
+               "m": m,
+               "nTh": nTh,
+               "alpha": alph,
+               "nt": nt,
+               "nt_val": nt_val,
+               "Number of trainable parameters": count_parameters(net),
+               "optimizer": str(optim),
+               "data": args.data,
+               # "device": device,
+               "n_train": n_train,
+               "maxIters": args.niters,
+               "val_freq": args.val_freq,
+               "viz_freq": args.viz_freq,
+               "batch size": args.bs})
 
     # show Q and W values, but they're already included inside the L value
     log_msg = (
@@ -180,30 +192,47 @@ if __name__ == '__main__':
     time_meter = utils.AverageMeter()
     end = time.time()
 
+    net.train()
+
     loss_train = []
     loss_val = []
-
-    net.train()
-    net_snapshot.train()
     batch_num = int(args.n_train/args.bs)
 
-    for itr in range(0, args.niters, batch_num):
+    for itr in range(batch_num, args.niters+1, batch_num):
 
         train_loader = DataLoader(x0, args.bs, shuffle = True)
-        val_loader = DataLoader(x0, args.bs, shuffle = True)
+        val_loader = DataLoader(x0v, args.bs, shuffle = True)
 
-        Jc, cs, net, net_snapshot, itr = train_epoch_SVRG(net, net_snapshot, optimizer_k, optimizer_snapshot, train_loader, prob, tspan, nt, "rk4", net.alph, itr)
+        net.train()
+
+        for x in train_loader:
+            optim.zero_grad()
+            Jc, cs = OCflow(x, net, prob, tspan=tspan, nt=nt, stepper="rk4", alph=net.alph)
+            Jc.backward()
+            optim.step() # sag
+
+        # for plot
+        loss_train.append(Jc.detach().item())
 
         time_meter.update(time.time() - end)
 
-        # for plot
-        loss_train.append(Jc)
-
         log_message = (
             '{:05d} {:7.1e} {:6.2f}   {:9.3e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}'.format(
-                itr, optimizer_k.param_groups[0]['lr'], time_meter.val, Jc, cs[0], cs[1], cs[2], cs[3], cs[4], cs[5], cs[6]
+                itr, optim.param_groups[0]['lr'], time_meter.val, Jc, cs[0], cs[1], cs[2], cs[3], cs[4], cs[5], cs[6]
             )
         )
+
+        wandb.log({"iter": itr,
+                   "lr": optim.param_groups[0]['lr'],
+                   "time": time_meter.val,
+                   "loss": Jc,
+                   "L": cs[0],
+                   "G": cs[1],
+                   "HJt": cs[2],
+                   "HJfin": cs[3],
+                   "HJgrad": cs[4],
+                   "Q": cs[5],
+                   "W": cs[6]})
 
 
         # validation
@@ -212,19 +241,30 @@ if __name__ == '__main__':
                 net.eval()
                 prob.eval()
 
-                test_loss, test_cs, net = validate_epoch(net, val_loader, prob, tspan, nt, "rk4", net.alph)
+                for x in val_loader:
+                    test_loss, test_cs = OCflow(x, net, prob, tspan=tspan, nt=nt, stepper="rk4", alph=net.alph)
 
                 # for plot
-                loss_val.append(test_loss)
+                loss_val.append(test_loss.detach().item())
 
                 # add to print message
                 log_message += '    {:9.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e} '.format(
                     test_loss, test_cs[0], test_cs[1], test_cs[2], test_cs[3], test_cs[4], test_cs[5], test_cs[6]
                 )
 
+                wandb.log({"iter": itr,
+                           "valLoss": test_loss,
+                           "valL": test_cs[0],
+                           "valG": test_cs[1],
+                           "valHJt": test_cs[2],
+                           "valHJf": test_cs[3],
+                           "valHJg": test_cs[4],
+                           "valQ": test_cs[5],
+                           "valW": test_cs[6]})
+
                 # save best set of parameters
-                if test_loss < best_loss:
-                    best_loss = test_loss
+                if test_loss.item() < best_loss:
+                    best_loss = test_loss.item()
                     best_cs = test_cs
                     utils.makedirs(args.save)
                     bestParams = net.state_dict()
@@ -275,15 +315,12 @@ if __name__ == '__main__':
 
         # shrink step size
         if itr % args.lr_freq == 0:
-            print('step size shrinked')
             net.load_state_dict(bestParams) # reset parameters to the best so far
-            for p in optimizer_k.param_groups:
-                print(p['lr'])
+            for p in optim.param_groups:
                 p['lr'] *= args.lr_decay
 
         if itr % args.sample_freq == 0:
             x0 = resample(x0, xInit, args.var0, cvt)
-            print('resampled.')
 
         # change weights on penalizers midway through training
         if itr == nChgAlpha:
@@ -294,14 +331,18 @@ if __name__ == '__main__':
 
         end = time.time()
 
+    # plot loss vs. niters
     train_loss, = plt.plot(np.linspace(1, args.niters + 1, len(loss_train)), loss_train, label='train_loss')
     val_loss, = plt.plot(np.linspace(1, args.niters + 1, len(loss_val)), loss_val, label='val_loss')
     plt.legend(handles=[train_loss, val_loss])
     plt.xlabel('niters')
     plt.ylabel('loss')
-    plt.savefig("result_trainOC_SVRG.png")
+    plt.savefig("result_trainOC_SAG.png")
 
     logger.info("Training Time: {:} seconds".format(time_meter.sum))
     logger.info('Training has finished.  ' + os.path.join(args.save, strTitle ))
+
+    wandb.log({"result_image": wandb.Image("result_trainOC_SAG.png"),
+               "Training Time": time_meter.sum})
 
 

@@ -1,0 +1,22 @@
+{
+    "os": "Darwin-19.4.0-x86_64-i386-64bit",
+    "python": "3.7.3",
+    "heartbeatAt": "2021-10-07T08:43:21.279624",
+    "startedAt": "2021-10-07T08:43:19.501865",
+    "docker": null,
+    "cpu_count": 8,
+    "cuda": null,
+    "args": [],
+    "state": "running",
+    "program": "/Users/lizeman/Desktop/Research_YujanTing/optimizer_yujan/trainOC_RV_optimizer/trainOC_SAG1.py",
+    "codePath": "optimizer_yujan/trainOC_RV_optimizer/trainOC_SAG1.py",
+    "git": {
+        "remote": "git@github.com:YujanTing/NeuralOC.git",
+        "commit": "5eeaebfa3132e4941268ce3a6358f728eab3fba4"
+    },
+    "email": "yu-jan.ting@emory.edu",
+    "root": "/Users/lizeman/Desktop/Research_YujanTing",
+    "host": "Zemans-MacBook-Pro.local",
+    "username": "lizeman",
+    "executable": "/Users/lizeman/Desktop/Research_YujanTing/venv/bin/python"
+}

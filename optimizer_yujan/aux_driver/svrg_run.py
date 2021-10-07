@@ -27,8 +27,6 @@ from src.OCflow import OCflow
 
 def train_epoch_SVRG(net, net_snapshot, optimizer_k, optimizer_snapshot, train_loader, prob, tspan, nt, stepper, alph, itr):
 
-    net.train()
-    net_snapshot.train()
     loss = AverageCalculator()
 
     # calculate the mean gradient
@@ -68,7 +66,6 @@ def train_epoch_SVRG(net, net_snapshot, optimizer_k, optimizer_snapshot, train_l
 def validate_epoch(net, val_loader, prob, tspan, nt, stepper, alph):
     """One epoch of validation
     """
-    net.eval()
     loss = AverageCalculator()
 
     for x in val_loader:
