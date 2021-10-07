@@ -16,6 +16,8 @@ from src.OCflow import OCflow
 from src.plotter import *
 from src.initProb import *
 
+import matplotlib.pyplot as plt
+
 
 # defaults are for
 
@@ -130,7 +132,7 @@ if __name__ == '__main__':
         net.load_state_dict(checkpt["state_dict"])
         net = net.to(argPrec).to(device)
 
-    optim = torch.optim.Adam(net.parameters(), lr=args.lr, weight_decay=args.weight_decay )
+    optim = torch.optim.Adam(net.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     strTitle = args.data + '_' + sStartTime + '_alph{:}_{:}_{:}_{:}_{:}_{:}_m{:}'.format(
                      int(alph[0]), int(alph[1]), int(alph[2]),int(alph[3]), int(alph[4]), int(alph[5]), m)
@@ -165,6 +167,8 @@ if __name__ == '__main__':
     time_meter = utils.AverageMeter()
     end = time.time()
 
+    loss_train = []
+    loss_val = []
     net.train()
     for itr in range(1, args.niters+1):
 
@@ -172,6 +176,9 @@ if __name__ == '__main__':
         Jc, cs = OCflow(x0, net, prob, tspan=tspan, nt=nt, stepper="rk4", alph=net.alph)
         Jc.backward()
         optim.step()  # ADAM
+
+        # for plot
+        loss_train.append(Jc.detach().item())
 
         time_meter.update(time.time() - end)
 
@@ -194,6 +201,9 @@ if __name__ == '__main__':
                 log_message += '    {:9.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e} '.format(
                     test_loss, test_cs[0], test_cs[1], test_cs[2], test_cs[3], test_cs[4], test_cs[5], test_cs[6]
                 )
+
+                # for plot
+                loss_val.append(test_loss.detach().item())
 
                 # save best set of parameters
                 if test_loss.item() < best_loss:
@@ -263,6 +273,13 @@ if __name__ == '__main__':
             logger.info('alph values changed')
 
         end = time.time()
+
+    train_loss, = plt.plot(np.linspace(1, args.niters + 1, len(loss_train)), loss_train, label='train_loss')
+    val_loss, = plt.plot(np.linspace(1, args.niters + 1, len(loss_val)), loss_val, label='val_loss')
+    plt.legend(handles=[train_loss, val_loss])
+    plt.xlabel('niters')
+    plt.ylabel('loss')
+    plt.savefig("result_trainOC_Adam.png")
 
     logger.info("Training Time: {:} seconds".format(time_meter.sum))
     logger.info('Training has finished.  ' + os.path.join(args.save, strTitle ))

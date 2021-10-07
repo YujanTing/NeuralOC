@@ -2,6 +2,7 @@
 # train neural network driver for optimal control problems
 
 import argparse
+
 import numpy as np
 import time
 import datetime
@@ -11,10 +12,17 @@ import src.utils as utils
 from src.utils import count_parameters
 from torch.nn.functional import pad
 
+import matplotlib.pyplot as plt
+import matplotlib
+
+
 from src.Phi import *
 from src.OCflow import OCflow
 from src.plotter import *
 from src.initProb import *
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import StepLR
+from torch.optim.lr_scheduler import MultiStepLR
 
 from optimizer_yujan.VR_optimizer.saga import SAGA
 torch.autograd.set_detect_anomaly(True)
@@ -35,7 +43,7 @@ parser.add_argument('--alph'  , type=str, default='100.0, 10000.0, 300.0, 0.2, 0
 parser.add_argument('--m'     , type=int, default=32, help="NN width")
 parser.add_argument('--nTh'   , type=int, default=2 , help="NN depth")
 
-parser.add_argument('--niters', type=int, default=2500)
+parser.add_argument('--niters', type=int, default=1800)
 parser.add_argument('--lr'    , type=float, default=0.01)
 parser.add_argument('--optim' , type=str, default='adam', choices=['adam'])
 parser.add_argument('--weight_decay', type=float, default=0.0)
@@ -134,6 +142,9 @@ if __name__ == '__main__':
 
     seed = 77
     optim = SAGA(net.parameters(), dict(lr=0.0001, n=1024, seed=77))
+    # scheduler = ReduceLROnPlateau(optim, 'min', factor=0.1, patience=1)
+    scheduler = StepLR(optim, 10, gamma=0.1)
+    # scheduler = MultiStepLR(optim, [400,500,600,700,800,900,1000,1100,1200,1300,1400,1500,1600,1700,1800], gamma=0.1)
 
     strTitle = args.data + '_' + sStartTime + '_alph{:}_{:}_{:}_{:}_{:}_{:}_m{:}'.format(
         int(alph[0]), int(alph[1]), int(alph[2]),int(alph[3]), int(alph[4]), int(alph[5]), m)
@@ -171,7 +182,10 @@ if __name__ == '__main__':
     rd = np.random.RandomState(seed)
     net.train()
 
-    for itr in range(1, args.niters):
+    loss_train = []
+    loss_val = []
+
+    for itr in range(1, args.niters + 1):
 
         # samples ik ∈ {1, . . . , n}
         i_k = int(rd.rand(1) * args.n_train)
@@ -182,6 +196,9 @@ if __name__ == '__main__':
         Jc.backward()
         optim.step()  # saga
 
+        # for plot
+        loss_train.append(Jc.detach().item())
+
         # print('itr: ' + str(itr))
         # print('i_k outside: ' + str(i_k))
         # count = 0
@@ -189,7 +206,6 @@ if __name__ == '__main__':
         #     for p in group['params']:
         #         print(p.size())
         #         print('----------------------------------------------------------')
-
 
 
         time_meter.update(time.time() - end)
@@ -208,6 +224,13 @@ if __name__ == '__main__':
                 prob.eval()
 
                 test_loss, test_cs = OCflow(x0v, net, prob, tspan=tspan, nt=nt, stepper="rk4", alph=net.alph)
+
+                # lr decay strategy
+                # scheduler.step(test_loss)
+                scheduler.step()
+
+                # for plot
+                loss_val.append(test_loss.detach().item())
 
                 # add to print message
                 log_message += '    {:9.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e}  {:8.2e} '.format(
@@ -265,11 +288,11 @@ if __name__ == '__main__':
             net.train()
             prob.train()
 
-        # shrink step size
-        if itr % args.lr_freq == 0:
-            net.load_state_dict(bestParams) # reset parameters to the best so far
-            for p in optim.param_groups:
-                p['lr'] *= args.lr_decay
+        # # shrink step size
+        # if itr % args.lr_freq == 0:
+        #     net.load_state_dict(bestParams) # reset parameters to the best so far
+        #     for p in optim.param_groups:
+        #         p['lr'] *= args.lr_decay
 
         if itr % args.sample_freq == 0:
             x0 = resample(x0, xInit, args.var0, cvt)
@@ -282,6 +305,14 @@ if __name__ == '__main__':
             logger.info('alph values changed')
 
         end = time.time()
+
+    train_loss, = plt.plot(np.linspace(1, args.niters + 1, len(loss_train)), loss_train, label='train_loss')
+    val_loss, = plt.plot(np.linspace(1, args.niters + 1, len(loss_val)), loss_val, label='val_loss')
+    plt.legend(handles=[train_loss, val_loss])
+    plt.xlabel('niters')
+    plt.ylabel('loss')
+    plt.savefig("result_trainOC_SAGA.png")
+
 
     logger.info("Training Time: {:} seconds".format(time_meter.sum))
     logger.info('Training has finished.  ' + os.path.join(args.save, strTitle ))
