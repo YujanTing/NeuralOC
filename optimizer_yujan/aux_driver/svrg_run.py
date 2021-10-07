@@ -25,7 +25,7 @@ import torch
 from torch.cuda import device
 from src.OCflow import OCflow
 
-def train_epoch_SVRG(itr, net, net_snapshot, optimizer_k, optimizer_snapshot, train_loader, prob, tspan, nt, stepper, alph):
+def train_epoch_SVRG(net, net_snapshot, optimizer_k, optimizer_snapshot, train_loader, prob, tspan, nt, stepper, alph, itr):
 
     net.train()
     net_snapshot.train()
@@ -59,13 +59,11 @@ def train_epoch_SVRG(itr, net, net_snapshot, optimizer_k, optimizer_snapshot, tr
         # logging
         loss.update(Jc_iter.data.item())
         itr += 1
-        print('itr: ' + str(itr))
-        print('loss.avg' + str(loss.avg))
 
     # update the snapshot
     optimizer_snapshot.set_param_groups(optimizer_k.get_param_groups())
 
-    return loss.avg, cs_iter, itr, net, net_snapshot
+    return loss.avg, cs_iter, net, net_snapshot, itr
 
 def validate_epoch(net, val_loader, prob, tspan, nt, stepper, alph):
     """One epoch of validation
